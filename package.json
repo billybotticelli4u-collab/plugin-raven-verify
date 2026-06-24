@@ -1,0 +1,78 @@
+{
+  "name": "plugin-raven-verify",
+  "version": "0.1.0",
+  "description": "ElizaOS plugin: pre-action Solana token verification via Raven — signed, scope-bounded on-chain evidence receipts (checks performed, checks NOT performed, coverage gaps, ed25519 signature). Reports evidence, never a safe/unsafe verdict or trading advice.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/billybotticelli4u-collab/plugin-raven-verify.git"
+  },
+  "homepage": "https://ravenattest.com",
+  "bugs": {
+    "url": "https://github.com/billybotticelli4u-collab/plugin-raven-verify/issues"
+  },
+  "author": "Raven (https://ravenattest.com)",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "peerDependencies": {
+    "@elizaos/core": "^1.0.0"
+  },
+  "devDependencies": {
+    "@elizaos/core": "^1.0.0",
+    "@types/node": "^22.20.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  },
+  "agentConfig": {
+    "pluginType": "elizaos:plugin:1.0.0",
+    "pluginParameters": {
+      "RAVEN_API_KEY": {
+        "type": "string",
+        "description": "Raven hosted-verifier API key. Request at https://raven-launch-console.vercel.app/request-access.html",
+        "required": true,
+        "sensitive": true
+      },
+      "SOLANA_RPC_URL": {
+        "type": "string",
+        "description": "Solana RPC endpoint, used to resolve the owning token program for a mint before verification.",
+        "required": true
+      },
+      "RAVEN_VERIFIER_URL": {
+        "type": "string",
+        "description": "Raven verifier base URL (override only if self-hosting).",
+        "required": false,
+        "default": "https://raven-hosted-verifier.onrender.com"
+      }
+    }
+  },
+  "keywords": [
+    "elizaos-plugins",
+    "elizaos",
+    "plugin",
+    "solana",
+    "token",
+    "verification",
+    "attestation",
+    "raven",
+    "signed-receipt"
+  ],
+  "license": "MIT"
+}
