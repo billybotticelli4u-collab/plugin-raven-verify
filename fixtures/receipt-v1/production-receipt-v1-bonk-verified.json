@@ -1,0 +1,66 @@
+{
+  "name": "production-receipt-v1-bonk-verified",
+  "description": "Real production capture: POST /receipt/v1 on raven-hosted-verifier.onrender.com for BONK (DezX..PB263) under SPL Token program. receipt-v1 format, signed by keyId rvk_c2997e90215279c2 (domain raven-official-attestation, registry v2). Captured 2026-06-26T11:46:30.924Z. No API key present.",
+  "input": {
+    "chain": "solana-mainnet",
+    "mintAddress": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "tokenProgramAddress": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "slot": 429014958,
+    "timestamp": "2026-06-26T11:46:30.924Z",
+    "rulesVersion": "raven-rules@1.0.0",
+    "findingTaxonomyVersion": "raven-taxonomy@1.0.0",
+    "scopeChecksPerformed": [
+      "freeze_authority",
+      "mint_authority",
+      "token_program_tier"
+    ],
+    "scopeChecksNotPerformed": [
+      "deployer_history",
+      "liquidity_depth",
+      "top_holders"
+    ],
+    "coverageGaps": [
+      "deployer_outcomes",
+      "liquidity",
+      "top_holders"
+    ],
+    "findings": [
+      {
+        "code": "venue.infrastructure_tier_immutable",
+        "source": "token_program_dependency_evidence",
+        "subject": "token_program_dependency",
+        "evidence": {
+          "tokenProgramAddress": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          "dependencyKind": "known_policy_program",
+          "programFamilyName": "SPL Token Program",
+          "classification": "immutable_infrastructure",
+          "phase0IdentityStatus": "verified_present",
+          "phase0MutabilityStatus": "immutable",
+          "upgradeAuthority": null
+        }
+      }
+    ],
+    "interpretations": [
+      {
+        "code": "venue.infrastructure_tier_immutable",
+        "text": "The token depends on immutable (non-upgradeable) programs.",
+        "lang": "en"
+      }
+    ],
+    "maxAgeSeconds": 300,
+    "disclaimer": "This attestation reports on-chain state within the defined scope at the stated slot. It is not a prediction, recommendation, or declaration of safety.",
+    "payloadHash": "sha256:40580238683308ab92a52a4b0b63290f5adec1cd0918ce96ec1b4995b3c21ccc",
+    "receiptId": "raven-receipt-v1:sha256:40580238683308ab92a52a4b0b63290f5adec1cd0918ce96ec1b4995b3c21ccc",
+    "signature": "NJq2eNtjH89lvT+yYlSy7QPiYYi6thUHkcNkQ+4vruGkozkDkyDYtg2MgSc2u0dbnf/273ltbk2QY3Xf4EbnDA==",
+    "signerPublicKey": "MCowBQYDK2VwAyEASGJt4Ilx2Z6g0BVC1VQIfaUcV0nr8WB1J45/8vfje6w="
+  },
+  "now": "2026-06-26T11:47:30.924Z",
+  "trustedKeys": [
+    "MCowBQYDK2VwAyEASGJt4Ilx2Z6g0BVC1VQIfaUcV0nr8WB1J45/8vfje6w="
+  ],
+  "expected": {
+    "valid": true,
+    "stale": false,
+    "keyTrusted": true
+  }
+}

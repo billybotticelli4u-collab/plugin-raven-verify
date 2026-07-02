@@ -1,0 +1,58 @@
+{
+  "name": "tampered-finding",
+  "description": "A byte changed in findings after signing -> payloadHash mismatch.",
+  "input": {
+    "chain": "solana-mainnet",
+    "mintAddress": "So11111111111111111111111111111111111111112",
+    "tokenProgramAddress": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "slot": 123456,
+    "timestamp": "2026-06-19T12:00:00.000Z",
+    "rulesVersion": "raven-rules@1.0.0",
+    "findingTaxonomyVersion": "raven-taxonomy@1.0.0",
+    "scopeChecksPerformed": [
+      "freeze_authority",
+      "mint_authority",
+      "token_program_tier"
+    ],
+    "scopeChecksNotPerformed": [
+      "deployer_history",
+      "liquidity_depth",
+      "top_holders"
+    ],
+    "coverageGaps": [
+      "deployer_outcomes",
+      "liquidity",
+      "top_holders"
+    ],
+    "findings": [
+      {
+        "code": "venue.infrastructure_tier_immutable",
+        "source": "token_program_dependency_evidence",
+        "evidence": {
+          "tier": "mutable"
+        }
+      }
+    ],
+    "interpretations": [
+      {
+        "code": "venue.infrastructure_tier_immutable",
+        "text": "The token depends on immutable (non-upgradeable) programs.",
+        "lang": "en"
+      }
+    ],
+    "maxAgeSeconds": 300,
+    "disclaimer": "This attestation reports on-chain state within the defined scope at the stated slot. It is not a prediction, recommendation, or declaration of safety.",
+    "payloadHash": "sha256:36494c649915748f8a5ef5cc1f313f371448fece0eae0a6212580ccdaa0123d8",
+    "receiptId": "raven-receipt-v1:sha256:36494c649915748f8a5ef5cc1f313f371448fece0eae0a6212580ccdaa0123d8",
+    "signature": "spbslxBT87LCWj46q9rRkZhVuRsxstdvJpeSUxnYiDYjfDF9X5OL4IIByWDXTIxMtAIMUjcO103flTb//DEmDw==",
+    "signerPublicKey": "MCowBQYDK2VwAyEA0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+  },
+  "now": "2026-06-19T12:01:00.000Z",
+  "expected": {
+    "valid": false,
+    "stale": false,
+    "reasonsInclude": [
+      "payload_hash_mismatch"
+    ]
+  }
+}

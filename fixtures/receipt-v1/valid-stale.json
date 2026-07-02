@@ -1,0 +1,41 @@
+{
+  "name": "valid-stale",
+  "description": "Valid signature; timestamp older than maxAgeSeconds vs the fixed now.",
+  "input": {
+    "chain": "solana-mainnet",
+    "mintAddress": "So11111111111111111111111111111111111111112",
+    "tokenProgramAddress": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "slot": 123456,
+    "timestamp": "2026-06-19T12:00:00.000Z",
+    "rulesVersion": "raven-rules@1.0.0",
+    "findingTaxonomyVersion": "raven-taxonomy@1.0.0",
+    "scopeChecksPerformed": [
+      "freeze_authority",
+      "mint_authority",
+      "token_program_tier"
+    ],
+    "scopeChecksNotPerformed": [
+      "deployer_history",
+      "liquidity_depth",
+      "top_holders"
+    ],
+    "coverageGaps": [
+      "deployer_outcomes",
+      "liquidity",
+      "top_holders"
+    ],
+    "findings": [],
+    "interpretations": [],
+    "maxAgeSeconds": 300,
+    "disclaimer": "This attestation reports on-chain state within the defined scope at the stated slot. It is not a prediction, recommendation, or declaration of safety.",
+    "payloadHash": "sha256:b98794de2a80b4b818e5499c451ea58b9da42b2dd60dd0d24448f64524835482",
+    "receiptId": "raven-receipt-v1:sha256:b98794de2a80b4b818e5499c451ea58b9da42b2dd60dd0d24448f64524835482",
+    "signature": "fme2hukCYeh0PFQp6lmBVRcyq4XlKQYWfi1BuNedwGcIkEaRlZvcjSGFY4BH9eADmsNLmcbRZNG0M5gphmqGBQ==",
+    "signerPublicKey": "MCowBQYDK2VwAyEA0EqyMnQrtKs6E2i9RhXk5tAiSrcaAWuvhSCjMsl3hzc="
+  },
+  "now": "2026-06-19T12:10:00.000Z",
+  "expected": {
+    "valid": true,
+    "stale": true
+  }
+}

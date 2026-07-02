@@ -1,0 +1,44 @@
+{
+  "name": "unparseable-timestamp",
+  "description": "Correctly signed receipt whose timestamp does not parse. Freshness is UNPROVABLE, so the verifier fails closed: valid (signature holds) but stale:true with reason timestamp_unparseable — never fresh-forever. Regression vector for issue #13 item 3.",
+  "input": {
+    "chain": "solana-mainnet",
+    "mintAddress": "So11111111111111111111111111111111111111112",
+    "tokenProgramAddress": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "slot": 123456,
+    "timestamp": "not-a-parseable-time",
+    "rulesVersion": "raven-rules@1.0.0",
+    "findingTaxonomyVersion": "raven-taxonomy@1.0.0",
+    "scopeChecksPerformed": [
+      "freeze_authority",
+      "mint_authority",
+      "token_program_tier"
+    ],
+    "scopeChecksNotPerformed": [
+      "deployer_history",
+      "liquidity_depth",
+      "top_holders"
+    ],
+    "coverageGaps": [
+      "deployer_outcomes",
+      "liquidity",
+      "top_holders"
+    ],
+    "findings": [],
+    "interpretations": [],
+    "maxAgeSeconds": 300,
+    "disclaimer": "This attestation reports on-chain state within the defined scope at the stated slot. It is not a prediction, recommendation, or declaration of safety.",
+    "payloadHash": "sha256:36dc3573298ec008539c2fa35e8d787e659ad1219326dd0ee95c70878a5f2139",
+    "receiptId": "raven-receipt-v1:sha256:36dc3573298ec008539c2fa35e8d787e659ad1219326dd0ee95c70878a5f2139",
+    "signature": "YQNv8GAcYEp+L6l8dmk++KagC38p23t8aIQpw985bc7DwQsq1GW/p2TYqFzprmhQh3XxPJTfub1Q+h079z8eDA==",
+    "signerPublicKey": "MCowBQYDK2VwAyEAzcgIHGPdkLXuLw5QgNL2r+51k6bmbSxUlYwem5y8jqs="
+  },
+  "now": "2026-07-02T12:00:00.000Z",
+  "expected": {
+    "valid": true,
+    "stale": true,
+    "reasonsInclude": [
+      "timestamp_unparseable"
+    ]
+  }
+}
