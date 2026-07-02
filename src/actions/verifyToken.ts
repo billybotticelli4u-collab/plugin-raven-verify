@@ -8,6 +8,8 @@ import {
   logger,
 } from '@elizaos/core';
 
+import { verifyReceiptV1 } from '../verify/verifyReceiptV1.ts';
+
 const DEFAULT_VERIFIER_URL = 'https://raven-hosted-verifier.onrender.com';
 
 // Solana base58 addresses are 32–44 chars from the base58 alphabet (no 0OIl).
@@ -23,40 +25,65 @@ export function extractMint(text: string | undefined | null): string | null {
   return candidates.sort((a, b) => b.length - a.length)[0];
 }
 
+/** HTTP statuses that mean "try again later", not "no". */
+const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+let pubkeyCache: { keys: ReadonlySet<string>; fetchedAt: number } | null = null;
+const PUBKEY_CACHE_TTL_MS = 10 * 60_000;
+
 /**
- * Resolve the owning token program (SPL Token or Token-2022) for a mint via
- * getAccountInfo. Raven needs the token program; we resolve it rather than
- * assume it. Returns null on any failure (the action then declines — never guesses).
+ * Trusted signer keys for LOCAL verification.
+ * Strongest: pin via RAVEN_TRUSTED_KEYS (comma-separated base64 SPKI DER).
+ * Fallback: fetch {verifier}/pubkey and trust the published key set (cached 10 min).
+ * Returns an empty set on failure — verification then reports keyTrusted: false
+ * rather than pretending.
  */
-export async function resolveTokenProgram(
-  rpcUrl: string,
-  mint: string,
+export async function loadTrustedKeys(
+  runtime: IAgentRuntime,
+  verifierUrl: string,
   fetchImpl: typeof fetch = fetch,
-): Promise<string | null> {
+): Promise<ReadonlySet<string>> {
+  const pinned = runtime.getSetting('RAVEN_TRUSTED_KEYS') as string | undefined;
+  if (pinned && pinned.trim().length > 0) {
+    return new Set(
+      pinned
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    );
+  }
+  if (pubkeyCache && Date.now() - pubkeyCache.fetchedAt < PUBKEY_CACHE_TTL_MS) {
+    return pubkeyCache.keys;
+  }
   try {
-    const res = await fetchImpl(rpcUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'getAccountInfo',
-        params: [mint, { encoding: 'base64', commitment: 'finalized' }],
-      }),
-    });
-    const json: any = await res.json();
-    const owner = json?.result?.value?.owner;
-    return typeof owner === 'string' && owner.length >= 32 ? owner : null;
+    const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/pubkey`);
+    if (!res.ok) return new Set();
+    const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: unknown }> };
+    const keys = new Set(
+      (body?.keys ?? [])
+        .map((k) => k?.publicKeyBase64)
+        .filter((s): s is string => typeof s === 'string' && s.length > 0),
+    );
+    if (keys.size > 0) pubkeyCache = { keys, fetchedAt: Date.now() };
+    return keys;
   } catch {
-    return null;
+    return new Set();
   }
 }
+
+const strArray = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
 export const verifyTokenAction: Action = {
   name: 'VERIFY_TOKEN',
   similes: ['CHECK_TOKEN', 'VERIFY_MINT', 'RAVEN_VERIFY', 'TOKEN_EVIDENCE', 'TOKEN_RECEIPT'],
   description:
-    'Fetch a signed, scope-bounded Raven receipt of on-chain evidence for a Solana token mint before a token-touching action. Reports the checks performed, the checks NOT performed, coverage gaps, the observed slot, and an ed25519 signature. Does NOT give a safe/unsafe verdict, trading advice, or a price prediction; reports observed on-chain state only.',
+    'Fetch a signed Raven receipt (receipt-v1) of on-chain evidence for a Solana token ' +
+    'mint and VERIFY IT LOCALLY against trusted published keys before reporting. Reports ' +
+    'the checks performed, the checks NOT performed, coverage gaps, the observed ' +
+    'slot/timestamp, freshness, and local verification status. Does NOT give a ' +
+    'safe/unsafe verdict, trading advice, or a price prediction; reports locally ' +
+    'verified, observed on-chain state only — the agent applies its own policy.',
 
   validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
     if (!runtime.getSetting('RAVEN_API_KEY')) {
@@ -70,18 +97,17 @@ export const verifyTokenAction: Action = {
     runtime: IAgentRuntime,
     message: Memory,
     _state: State | undefined,
-    _options: unknown,
+    options?: unknown,
     callback?: HandlerCallback,
   ): Promise<ActionResult> => {
+    // Deterministic-test hooks (fetchImpl/now); production uses global fetch + wall clock.
+    const hooks = (options ?? {}) as { fetchImpl?: typeof fetch; now?: string };
     const apiKey = runtime.getSetting('RAVEN_API_KEY') as string;
-    const rpcUrl = runtime.getSetting('SOLANA_RPC_URL') as string | undefined;
     const verifierUrl =
       (runtime.getSetting('RAVEN_VERIFIER_URL') as string | undefined) || DEFAULT_VERIFIER_URL;
+    const fetchImpl = hooks.fetchImpl ?? fetch;
 
-    const fail = async (
-      text: string,
-      data?: Record<string, unknown>,
-    ): Promise<ActionResult> => {
+    const fail = async (text: string, data?: Record<string, unknown>): Promise<ActionResult> => {
       if (callback) await callback({ text, actions: ['VERIFY_TOKEN'] });
       return { text, success: false, ...(data ? { data } : {}) };
     };
@@ -90,66 +116,79 @@ export const verifyTokenAction: Action = {
     if (!mint) {
       return fail('No Solana mint address found. Provide a base58 mint to fetch a Raven receipt.');
     }
-    if (!rpcUrl) {
-      return fail('SOLANA_RPC_URL is not configured; it is required to resolve the token program for a mint.');
-    }
 
-    const tokenProgram = await resolveTokenProgram(rpcUrl, mint);
-    if (!tokenProgram) {
-      return fail(
-        `Could not resolve the token program for ${mint} (mint not found or RPC unavailable). Raven returns no receipt rather than guessing.`,
-      );
-    }
-
-    let body: any;
+    // 1. Request the receipt. The receipt itself carries the resolved token
+    //    program as a SIGNED field, so no client-side RPC lookup is needed.
+    let receipt: Record<string, unknown>;
     try {
-      const res = await fetch(`${verifierUrl.replace(/\/+$/, '')}/verify`, {
+      const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/receipt/v1`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
-        body: JSON.stringify({
-          mintAddress: mint,
-          tokenProgramAddress: tokenProgram,
-          commitment: 'finalized',
-        }),
+        body: JSON.stringify({ mintAddress: mint }),
       });
       if (!res.ok) {
-        return fail(
-          `Raven verifier returned HTTP ${res.status}; no receipt produced (fail-closed).`,
-          { status: res.status },
-        );
+        const retryAfter = res.headers.get('retry-after');
+        if (TRANSIENT_STATUSES.has(res.status)) {
+          return fail(
+            `Raven is temporarily unavailable (HTTP ${res.status}); no receipt produced — retry later` +
+              (retryAfter ? ` (suggested wait ~${retryAfter}s).` : '.'),
+            { status: res.status, transient: true },
+          );
+        }
+        return fail(`Raven returned HTTP ${res.status}; no receipt produced (fail-closed).`, {
+          status: res.status,
+        });
       }
-      body = await res.json();
+      receipt = (await res.json()) as Record<string, unknown>;
     } catch (err) {
       logger.error(
-        '[plugin-raven-verify] verify request failed',
+        '[plugin-raven-verify] receipt request failed',
         err instanceof Error ? err.message : String(err),
       );
-      return fail('Raven verifier request failed; no receipt produced.');
+      return fail('Raven request failed; no receipt produced — retry later.', { transient: true });
     }
 
-    // Honest, scope-bounded summary. Raven reports EVIDENCE, never a safe/unsafe call.
-    const verdict: string = body?.verdict ?? 'unknowable';
-    const reason: string = body?.reason ?? '';
-    const findingCodes: string[] = Array.isArray(body?.findingCodes) ? body.findingCodes : [];
-    const coverageGaps: string[] = Array.isArray(body?.coverageGaps) ? body.coverageGaps : [];
-    const keyId: string = body?.keyId ?? '';
-    const replayHash: string = body?.replayHash ?? '';
-    const slot = body?.rpc?.observedSlot ?? null;
+    // 2. VERIFY LOCALLY — the agent never trusts transport. Shape, disclaimer,
+    //    forbidden words, payload hash, receiptId, ed25519 signature; key trust
+    //    and freshness reported independently.
+    const trustedKeys = await loadTrustedKeys(runtime, verifierUrl, fetchImpl);
+    const verification = verifyReceiptV1(receipt, { now: hooks.now, trustedKeys });
+    if (!verification.valid) {
+      return fail(
+        `Raven receipt FAILED local verification (${verification.reasons.join(', ')}); ` +
+          'not usable evidence (fail-closed).',
+        { verification },
+      );
+    }
+
+    // 3. Report facts only. What was NOT checked gets the same standing as findings.
+    const findings = Array.isArray(receipt.findings)
+      ? (receipt.findings as Array<{ code?: unknown }>)
+          .map((f) => f?.code)
+          .filter((c): c is string => typeof c === 'string')
+      : [];
+    const notChecked = [
+      ...new Set([...strArray(receipt.scopeChecksNotPerformed), ...strArray(receipt.coverageGaps)]),
+    ];
+    const keyLine =
+      verification.keyTrusted === true
+        ? 'signature verified locally against a trusted published key'
+        : 'signature verified locally, but the signing key is NOT in the trusted key set';
 
     const text = [
       `Raven receipt — ${mint}`,
-      `Outcome (scope-bounded, not a safety verdict): ${verdict}${reason ? ` (${reason})` : ''}`,
-      `Checks that fired: ${findingCodes.length ? findingCodes.join(', ') : 'none'}`,
-      `NOT evaluated / coverage gaps: ${coverageGaps.length ? coverageGaps.join(', ') : 'none reported'}`,
-      slot != null ? `Observed slot: ${slot}` : '',
-      `Signed: keyId ${keyId}; replayHash ${replayHash} — verify against ${verifierUrl}/pubkey.`,
-      'This reports observed on-chain state within a stated scope at the stated slot. It is not a prediction, recommendation, or declaration of safety — apply your own policy.',
+      `Local verification: ${keyLine}.` + (verification.stale ? ' STALE — older than its freshness budget; request a fresh receipt before relying on it.' : ''),
+      `Observed at slot ${receipt.slot} (${receipt.timestamp}); token program ${receipt.tokenProgramAddress}.`,
+      `Findings: ${findings.length ? findings.join(', ') : 'none within the performed scope'}`,
+      `NOT checked (unknown, not clear): ${notChecked.length ? notChecked.join(', ') : 'nothing — all catalogued checks ran'}`,
+      `Receipt: ${receipt.receiptId}`,
+      String(receipt.disclaimer ?? ''),
     ]
       .filter(Boolean)
       .join('\n');
 
     if (callback) await callback({ text, actions: ['VERIFY_TOKEN'] });
-    return { text, success: true, data: body };
+    return { text, success: true, data: { receipt, verification } };
   },
 
   examples: [
@@ -162,7 +201,7 @@ export const verifyTokenAction: Action = {
       },
       {
         name: '{{name2}}',
-        content: { text: 'Fetching a signed Raven receipt for that mint…', actions: ['VERIFY_TOKEN'] },
+        content: { text: 'Fetching a signed Raven receipt and verifying it locally…', actions: ['VERIFY_TOKEN'] },
       },
     ],
     [
