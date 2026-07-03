@@ -161,6 +161,20 @@ export const verifyTokenAction: Action = {
       );
     }
 
+    // 2b. BIND the receipt to the request. A valid signature proves the
+    //     receipt is authentic Raven evidence — it does NOT prove it is
+    //     evidence about THIS mint. Without this check, a valid receipt for
+    //     token A could be presented as evidence for token B. `mintAddress`
+    //     is inside the signed payload, so comparing after local
+    //     verification is sound (fail-closed).
+    if (receipt.mintAddress !== mint) {
+      return fail(
+        `Raven receipt is bound to a different mint (${String(receipt.mintAddress)}) than requested (${mint}); ` +
+          'not usable evidence (fail-closed).',
+        { verification, receiptMintAddress: receipt.mintAddress },
+      );
+    }
+
     // 3. Report facts only. What was NOT checked gets the same standing as findings.
     const findings = Array.isArray(receipt.findings)
       ? (receipt.findings as Array<{ code?: unknown }>)
