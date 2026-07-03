@@ -1,6 +1,6 @@
 {
   "name": "plugin-raven-verify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ElizaOS plugin: fetch a signed Raven receipt (receipt-v1) for a Solana mint and verify it LOCALLY against trusted published keys before reporting facts, scope, and coverage gaps. Evidence, not a safe/unsafe verdict.",
   "repository": {
     "type": "git",
@@ -49,11 +49,6 @@
         "description": "Raven hosted-verifier API key. Request at https://raven-launch-console.vercel.app/request-access.html",
         "required": true,
         "sensitive": true
-      },
-      "SOLANA_RPC_URL": {
-        "type": "string",
-        "description": "Solana RPC endpoint, used to resolve the owning token program for a mint before verification.",
-        "required": true
       },
       "RAVEN_VERIFIER_URL": {
         "type": "string",

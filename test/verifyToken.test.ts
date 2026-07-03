@@ -103,6 +103,39 @@ test('tampered receipt from transport FAILS local verification: fail-closed, nev
   assert.ok(r.text.includes('payload_hash_mismatch'), r.text);
 });
 
+test('receipt/request binding: a VALID signed receipt for a different mint is rejected fail-closed', async () => {
+  // The signature proves authenticity, not relevance. Serve the genuine,
+  // correctly-signed BONK receipt against a request for a DIFFERENT mint —
+  // it must never be presented as evidence for the requested token.
+  const otherMint = 'So11111111111111111111111111111111111111112';
+  assert.notEqual(otherMint, MINT);
+  const runtime = runtimeWith({ ...SETTINGS, RAVEN_TRUSTED_KEYS: vector.trustedKeys.join(',') });
+  const responses: Array<{ text: string }> = [];
+  const result = await verifyTokenAction.handler(
+    runtime,
+    msg(`check ${otherMint}`),
+    undefined,
+    {
+      now: vector.now,
+      fetchImpl: fakeFetch(() => new Response(JSON.stringify(vector.input), { status: 200 })),
+    },
+    async (r) => {
+      responses.push(r as { text: string });
+      return [];
+    },
+  );
+  const r = result as { success: boolean; text: string; data?: { receiptMintAddress?: string } };
+  assert.equal(r.success, false);
+  assert.ok(r.text.includes('bound to a different mint'), r.text);
+  assert.ok(r.text.includes('fail-closed'), r.text);
+  assert.equal(r.data?.receiptMintAddress, MINT);
+  // The requested mint's "receipt" must never appear as a success line.
+  for (const resp of responses) {
+    assert.ok(!resp.text.startsWith(`Raven receipt — ${otherMint}`), resp.text);
+  }
+  assert.ok(!FORBIDDEN.test(r.text));
+});
+
 test('429 is transient: retry-later text with the suggested wait, no evidence claimed', async () => {
   const runtime = runtimeWith({ ...SETTINGS });
   const result = await verifyTokenAction.handler(runtime, msg(`check ${MINT}`), undefined, {
