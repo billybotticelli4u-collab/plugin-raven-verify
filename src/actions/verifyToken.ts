@@ -1,18 +1,32 @@
-import { logger } from '@elizaos/core';
-import type { Action, ActionExample, HandlerCallback, IAgentRuntime, Memory, State } from '@elizaos/core';
-import { verifyReceiptV1, type TrustedKeysResolver } from '../verify/verifyReceiptV1.ts';
+import {
+  type Action,
+  type ActionResult,
+  type IAgentRuntime,
+  type Memory,
+  type State,
+  type HandlerCallback,
+  logger,
+} from '@elizaos/core';
+
+import { verifyReceiptV1 } from '../verify/verifyReceiptV1.ts';
 
 const DEFAULT_VERIFIER_URL = 'https://raven-hosted-verifier.onrender.com';
-const MINT_RE = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 
-// Solana base58 mint candidates can appear anywhere in free text ("check CA ...").
-// We pick the LONGEST candidate (CEX deposit addresses and mints are both base58;
-// the longer string is more specific and typically the mint in mixed content).
-export function extractMint(text: string): string | null {
-  const candidates = text.match(MINT_RE) ?? [];
+// Solana base58 addresses are 32–44 chars from the base58 alphabet (no 0OIl).
+const BASE58_TOKEN = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
+
+/** Pull the most likely mint address (longest base58 token) out of free text. */
+export function extractMint(text: string | undefined | null): string | null {
+  if (!text) return null;
+  const matches = text.match(BASE58_TOKEN);
+  if (!matches) return null;
+  const candidates = matches.filter((m) => m.length >= 32 && m.length <= 44);
   if (candidates.length === 0) return null;
   return candidates.sort((a, b) => b.length - a.length)[0];
 }
+
+/** HTTP statuses that mean "try again later", not "no". */
+const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 let pubkeyCache: { keys: ReadonlySet<string>; fetchedAt: number; verifierUrl: string } | null = null;
 const PUBKEY_CACHE_TTL_MS = 10 * 60_000;
@@ -28,6 +42,13 @@ const fetchTimeoutMs = (runtime: IAgentRuntime): number => {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_FETCH_TIMEOUT_MS;
 };
 
+/**
+ * Trusted signer keys for LOCAL verification.
+ * Strongest: pin via RAVEN_TRUSTED_KEYS (comma-separated base64 SPKI DER).
+ * Fallback: fetch {verifier}/pubkey and trust the published key set (cached 10 min).
+ * Returns an empty set on failure — verification then reports keyTrusted: false
+ * rather than pretending.
+ */
 export async function loadTrustedKeys(
   runtime: IAgentRuntime,
   verifierUrl: string,
@@ -69,44 +90,55 @@ export async function loadTrustedKeys(
   }
 }
 
-const RECEIPT_INSTRUCTIONS =
-  'Present the receipt as evidence, not a verdict. Lead with what was checked, ' +
-  'what was found, and what was NOT checked (coverage gaps). Never say or imply ' +
-  'safe/unsafe/legit/approved/guaranteed; the receipt is signed on-chain state ' +
-  'within a scope at a slot.';
+const strArray = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
 export const verifyTokenAction: Action = {
-  name: 'VERIFY_TOKEN_RAVEN',
-  similes: ['CHECK_TOKEN', 'RAVEN_VERIFY', 'VERIFY_MINT', 'TOKEN_EVIDENCE'],
+  name: 'VERIFY_TOKEN',
+  similes: ['CHECK_TOKEN', 'VERIFY_MINT', 'RAVEN_VERIFY', 'TOKEN_EVIDENCE', 'TOKEN_RECEIPT'],
   description:
-    'Fetches a signed, scope-bounded Raven receipt for a Solana token and presents it as evidence (never as a safe/unsafe verdict).',
+    'Fetch a signed Raven receipt (receipt-v1) of on-chain evidence for a Solana token ' +
+    'mint and VERIFY IT LOCALLY against trusted published keys before reporting. Reports ' +
+    'the checks performed, the checks NOT performed, coverage gaps, the observed ' +
+    'slot/timestamp, freshness, and local verification status. Does NOT give a ' +
+    'safe/unsafe verdict, trading advice, or a price prediction; reports locally ' +
+    'verified, observed on-chain state only — the agent applies its own policy.',
 
-  validate: async (runtime: IAgentRuntime, message: Memory) => {
-    const apiKey = runtime.getSetting('RAVEN_API_KEY');
-    if (!apiKey) return false;
-    const text = typeof message?.content?.text === 'string' ? message.content.text : '';
-    return extractMint(text) !== null;
+  validate: async (runtime: IAgentRuntime, message: Memory): Promise<boolean> => {
+    if (!runtime.getSetting('RAVEN_API_KEY')) {
+      logger.warn('[plugin-raven-verify] RAVEN_API_KEY not set; VERIFY_TOKEN disabled.');
+      return false;
+    }
+    return Boolean(extractMint(message?.content?.text));
   },
 
   handler: async (
     runtime: IAgentRuntime,
     message: Memory,
     _state: State | undefined,
-    options: { fetchImpl?: typeof fetch } | undefined,
-    callback: HandlerCallback | undefined,
-  ) => {
+    options?: unknown,
+    callback?: HandlerCallback,
+  ): Promise<ActionResult> => {
+    // Deterministic-test hooks (fetchImpl/now); production uses global fetch + wall clock.
+    const hooks = (options ?? {}) as { fetchImpl?: typeof fetch; now?: string };
     const apiKey = runtime.getSetting('RAVEN_API_KEY') as string;
-    const verifierUrl = ((runtime.getSetting('RAVEN_VERIFIER_URL') as string) || DEFAULT_VERIFIER_URL).replace(/\/+$/, '');
-    const text = typeof message?.content?.text === 'string' ? message.content.text : '';
-    const mint = extractMint(text);
+    const verifierUrl =
+      (runtime.getSetting('RAVEN_VERIFIER_URL') as string | undefined) || DEFAULT_VERIFIER_URL;
+    const fetchImpl = hooks.fetchImpl ?? fetch;
+
+    const fail = async (text: string, data?: Record<string, unknown>): Promise<ActionResult> => {
+      if (callback) await callback({ text, actions: ['VERIFY_TOKEN'] });
+      return { text, success: false, ...(data ? { data } : {}) };
+    };
+
+    const mint = extractMint(message?.content?.text);
     if (!mint) {
-      callback?.({ text: 'No Solana mint address found in your message.' });
-      return { success: false, error: 'no_mint_found' };
+      return fail('No Solana mint address found. Provide a base58 mint to fetch a Raven receipt.');
     }
 
-    const fetchImpl = options?.fetchImpl ?? fetch;
-
-    let receipt: unknown;
+    // 1. Request the receipt. The receipt itself carries the resolved token
+    //    program as a SIGNED field, so no client-side RPC lookup is needed.
+    let receipt: Record<string, unknown>;
     try {
       const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/receipt/v1`, {
         method: 'POST',
@@ -115,82 +147,106 @@ export const verifyTokenAction: Action = {
         signal: AbortSignal.timeout(fetchTimeoutMs(runtime)),
       });
       if (!res.ok) {
-        const detail = await res.text().catch(() => '');
-        logger.warn(`raven receipt request failed: HTTP ${res.status} ${detail.slice(0, 200)}`);
-        callback?.({
-          text: `Raven's verifier returned HTTP ${res.status}. No receipt was issued — nothing was verified.`,
+        const retryAfter = res.headers.get('retry-after');
+        if (TRANSIENT_STATUSES.has(res.status)) {
+          return fail(
+            `Raven is temporarily unavailable (HTTP ${res.status}); no receipt produced — retry later` +
+              (retryAfter ? ` (suggested wait ~${retryAfter}s).` : '.'),
+            { status: res.status, transient: true },
+          );
+        }
+        return fail(`Raven returned HTTP ${res.status}; no receipt produced (fail-closed).`, {
+          status: res.status,
         });
-        return { success: false, error: `http_${res.status}` };
       }
-      receipt = await res.json();
+      receipt = (await res.json()) as Record<string, unknown>;
     } catch (err) {
-      logger.warn(`raven receipt request error: ${String(err)}`);
-      callback?.({ text: 'Could not reach Raven\'s verifier. No receipt was issued — nothing was verified.' });
-      return { success: false, error: 'network_error' };
+      logger.error(
+        '[plugin-raven-verify] receipt request failed',
+        err instanceof Error ? err.message : String(err),
+      );
+      return fail('Raven request failed; no receipt produced — retry later.', { transient: true });
     }
 
-    // Verify LOCALLY — never trust transport. Key trust comes from pinned
-    // RAVEN_TRUSTED_KEYS when set (strongest), else the verifier's published
-    // /pubkey registry (TOFU, cached 10 min).
+    // 2. VERIFY LOCALLY — the agent never trusts transport. Shape, disclaimer,
+    //    forbidden words, payload hash, receiptId, ed25519 signature; key trust
+    //    and freshness reported independently.
     const trustedKeys = await loadTrustedKeys(runtime, verifierUrl, fetchImpl);
-    const resolveTrustedKeys: TrustedKeysResolver = async () => trustedKeys;
-    const result = verifyReceiptV1(receipt, { resolveTrustedKeys });
-
-    // Fail-closed on the mint-binding: the receipt must be about the mint that
-    // was asked about. A receipt for a different mint is NOT evidence for this one.
-    const receiptMint =
-      receipt && typeof receipt === 'object' && !Array.isArray(receipt)
-        ? (receipt as Record<string, unknown>).mintAddress
-        : undefined;
-    if (receiptMint !== mint) {
-      callback?.({
-        text: `Raven returned a receipt for a different mint (${String(receiptMint)}), not ${mint}. Discarding it.`,
-      });
-      return { success: false, error: 'mint_mismatch' };
+    const verification = verifyReceiptV1(receipt, { now: hooks.now, trustedKeys });
+    if (!verification.valid) {
+      return fail(
+        `Raven receipt FAILED local verification (${verification.reasons.join(', ')}); ` +
+          'not usable evidence (fail-closed).',
+        { verification },
+      );
     }
 
-    if (!result.valid) {
-      callback?.({
-        text: `Raven returned a receipt, but local verification FAILED (${result.reasons.join(', ')}). ` +
-          'Treat it as no evidence at all. ' +
-          RECEIPT_INSTRUCTIONS,
-      });
-      return { success: false, error: 'receipt_invalid', data: { reasons: result.reasons } };
+    // 2b. BIND the receipt to the request. A valid signature proves the
+    //     receipt is authentic Raven evidence — it does NOT prove it is
+    //     evidence about THIS mint. Without this check, a valid receipt for
+    //     token A could be presented as evidence for token B. `mintAddress`
+    //     is inside the signed payload, so comparing after local
+    //     verification is sound (fail-closed).
+    if (receipt.mintAddress !== mint) {
+      return fail(
+        `Raven receipt is bound to a different mint (${String(receipt.mintAddress)}) than requested (${mint}); ` +
+          'not usable evidence (fail-closed).',
+        { verification, receiptMintAddress: receipt.mintAddress },
+      );
     }
 
-    const r = receipt as Record<string, unknown>;
-    const lines: string[] = [];
-    lines.push(`Raven receipt for ${mint} — verified locally (signature, payload hash, disclaimer, scope all check out).`);
-    if (result.keyTrusted === true) lines.push('Signer key: trusted (matches Raven\'s published/pinned key).');
-    else if (result.keyTrusted === false) lines.push('Signer key: NOT in the trusted set — treat with caution.');
-    if (result.stale) lines.push('Note: the receipt is STALE (older than its own maxAgeSeconds).');
-    lines.push(`Scope checked: ${(r.scopeChecksPerformed as string[]).join(', ') || 'none'}.`);
-    lines.push(`NOT checked: ${(r.scopeChecksNotPerformed as string[]).join(', ') || 'none'}.`);
-    lines.push(`Coverage gaps: ${(r.coverageGaps as string[]).join(', ') || 'none'}.`);
-    const findings = r.findings as Array<{ code: string }>;
-    lines.push(findings.length > 0 ? `Findings: ${findings.map((f) => f.code).join(', ')}.` : 'Findings: none within scope.');
-    lines.push(RECEIPT_INSTRUCTIONS);
+    // 3. Report facts only. What was NOT checked gets the same standing as findings.
+    const findings = Array.isArray(receipt.findings)
+      ? (receipt.findings as Array<{ code?: unknown }>)
+          .map((f) => f?.code)
+          .filter((c): c is string => typeof c === 'string')
+      : [];
+    const notChecked = [
+      ...new Set([...strArray(receipt.scopeChecksNotPerformed), ...strArray(receipt.coverageGaps)]),
+    ];
+    const keyLine =
+      verification.keyTrusted === true
+        ? 'signature verified locally against a trusted published key'
+        : 'signature verified locally, but the signing key is NOT in the trusted key set';
 
-    callback?.({ text: lines.join('\n') });
-    return {
-      success: true,
-      data: {
-        receipt,
-        verification: { valid: result.valid, stale: result.stale, keyTrusted: result.keyTrusted, reasons: result.reasons },
-      },
-    };
+    const text = [
+      `Raven receipt — ${mint}`,
+      `Local verification: ${keyLine}.` + (verification.stale ? ' STALE — older than its freshness budget; request a fresh receipt before relying on it.' : ''),
+      `Observed at slot ${receipt.slot} (${receipt.timestamp}); token program ${receipt.tokenProgramAddress}.`,
+      `Findings: ${findings.length ? findings.join(', ') : 'none within the performed scope'}`,
+      `NOT checked (unknown, not clear): ${notChecked.length ? notChecked.join(', ') : 'nothing — all catalogued checks ran'}`,
+      `Receipt: ${receipt.receiptId}`,
+      String(receipt.disclaimer ?? ''),
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    if (callback) await callback({ text, actions: ['VERIFY_TOKEN'] });
+    return { text, success: true, data: { receipt, verification } };
   },
 
   examples: [
     [
-      { name: 'user', content: { text: 'Is EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v legit?' } },
       {
-        name: 'agent',
+        name: '{{name1}}',
         content: {
-          text: 'I can fetch Raven\'s signed evidence for that mint. Note Raven reports what was checked and found — it does not declare tokens legit or safe.',
-          actions: ['VERIFY_TOKEN_RAVEN'],
+          text: 'Before I touch this, get a Raven receipt for 9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump',
         },
       },
-    ] as ActionExample[],
+      {
+        name: '{{name2}}',
+        content: { text: 'Fetching a signed Raven receipt and verifying it locally…', actions: ['VERIFY_TOKEN'] },
+      },
+    ],
+    [
+      {
+        name: '{{name1}}',
+        content: { text: 'verify token So11111111111111111111111111111111111111112' },
+      },
+      {
+        name: '{{name2}}',
+        content: { text: 'Pulling the on-chain evidence receipt…', actions: ['VERIFY_TOKEN'] },
+      },
+    ],
   ],
 };
