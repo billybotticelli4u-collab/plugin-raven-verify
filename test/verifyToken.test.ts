@@ -14,7 +14,7 @@ import { verifyTokenAction, extractMint, loadTrustedKeys } from '../src/actions/
 
 const here = dirname(fileURLToPath(import.meta.url));
 const vectorsDir = join(here, '..', 'fixtures', 'receipt-v1');
-const vector = (name: string) => JSON.parse(readFileSync(join(vectorsDir, name), 'utf8'));
+const vector = (name: string) => JSON.parse(readFileSync(join(vectorsDir, `${name}.json`), 'utf8'));
 
 const RUNTIME_SETTINGS = {
   RAVEN_API_KEY: 'test-key-not-a-real-secret',
@@ -183,4 +183,41 @@ it('pubkey cache is keyed by verifier URL (no cross-host key reuse)', async () =
   assert.ok(!b1.has('key-of-host-a'), 'must not serve host-a keys for host-b');
   assert.equal(calls.filter((u) => u.includes('host-a')).length, 1, 'host-a fetched once (cached)');
   assert.equal(calls.filter((u) => u.includes('host-b')).length, 1, 'host-b fetched separately');
+});
+
+// --- Restored pre-existing coverage (dropped in the first push of this branch,
+// --- restored verbatim-in-substance with this file's helper style) -----------
+
+const FORBIDDEN = /\b(safe|unsafe|legit|scam-free|approved|guaranteed|rug-proof)\b/i;
+
+it('stale receipt (wall-clock now) is reported STALE while still verifying', async () => {
+  const v = vector('production-receipt-v1-bonk-verified');
+  const { fetchImpl } = fetchWith(v.input);
+  const runtime = runtimeWith({ ...RUNTIME_SETTINGS, RAVEN_TRUSTED_KEYS: v.trustedKeys.join(',') });
+  const result = await verifyTokenAction.handler(runtime, msg(`check ${v.input.mintAddress}`), undefined, {
+    // no `now` ⇒ wall clock; the June fixture is genuinely stale by now
+    fetchImpl,
+  });
+  assert.equal(result.success, true); // authentic evidence — staleness is reported, not hidden
+  assert.ok(result.text!.includes('STALE'), result.text);
+  assert.ok(!FORBIDDEN.test(result.text!));
+});
+
+it('loadTrustedKeys: pinned env wins; /pubkey fallback parses the published key set', async () => {
+  const pinned = await loadTrustedKeys(
+    runtimeWith({ RAVEN_TRUSTED_KEYS: ' keyA , keyB ' }),
+    'https://raven.example.test',
+    (async () => new Response('should-not-be-called', { status: 500 })) as unknown as typeof fetch,
+  );
+  assert.deepEqual([...pinned].sort(), ['keyA', 'keyB']);
+
+  const fetched = await loadTrustedKeys(
+    runtimeWith({}),
+    'https://raven.example.test',
+    (async (url: string) => {
+      assert.ok(url.endsWith('/pubkey'));
+      return jsonResponse(200, { keys: [{ keyId: 'rvk_x', publicKeyBase64: 'PUBKEY_B64', alg: 'ed25519' }] });
+    }) as unknown as typeof fetch,
+  );
+  assert.deepEqual([...fetched], ['PUBKEY_B64']);
 });
