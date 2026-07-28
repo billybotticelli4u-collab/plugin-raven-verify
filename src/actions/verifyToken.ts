@@ -28,8 +28,19 @@ export function extractMint(text: string | undefined | null): string | null {
 /** HTTP statuses that mean "try again later", not "no". */
 const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-let pubkeyCache: { keys: ReadonlySet<string>; fetchedAt: number } | null = null;
+let pubkeyCache: { keys: ReadonlySet<string>; fetchedAt: number; verifierUrl: string } | null = null;
 const PUBKEY_CACHE_TTL_MS = 10 * 60_000;
+
+/**
+ * Hard ceiling for any single outbound call. A hung verifier (cold starts,
+ * network partitions) must never hang the action forever. Overridable via
+ * RAVEN_FETCH_TIMEOUT_MS for operators with slower links.
+ */
+const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+const fetchTimeoutMs = (runtime: IAgentRuntime): number => {
+  const raw = Number(runtime.getSetting('RAVEN_FETCH_TIMEOUT_MS'));
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_FETCH_TIMEOUT_MS;
+};
 
 /**
  * Trusted signer keys for LOCAL verification.
@@ -52,11 +63,19 @@ export async function loadTrustedKeys(
         .filter((s) => s.length > 0),
     );
   }
-  if (pubkeyCache && Date.now() - pubkeyCache.fetchedAt < PUBKEY_CACHE_TTL_MS) {
+  // The cache is keyed BY VERIFIER URL: switching RAVEN_VERIFIER_URL at runtime
+  // must not keep serving the previous host's key set.
+  if (
+    pubkeyCache &&
+    pubkeyCache.verifierUrl === verifierUrl &&
+    Date.now() - pubkeyCache.fetchedAt < PUBKEY_CACHE_TTL_MS
+  ) {
     return pubkeyCache.keys;
   }
   try {
-    const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/pubkey`);
+    const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/pubkey`, {
+      signal: AbortSignal.timeout(fetchTimeoutMs(runtime)),
+    });
     if (!res.ok) return new Set();
     const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: unknown }> };
     const keys = new Set(
@@ -64,7 +83,7 @@ export async function loadTrustedKeys(
         .map((k) => k?.publicKeyBase64)
         .filter((s): s is string => typeof s === 'string' && s.length > 0),
     );
-    if (keys.size > 0) pubkeyCache = { keys, fetchedAt: Date.now() };
+    if (keys.size > 0) pubkeyCache = { keys, fetchedAt: Date.now(), verifierUrl };
     return keys;
   } catch {
     return new Set();
@@ -125,6 +144,7 @@ export const verifyTokenAction: Action = {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
         body: JSON.stringify({ mintAddress: mint }),
+        signal: AbortSignal.timeout(fetchTimeoutMs(runtime)),
       });
       if (!res.ok) {
         const retryAfter = res.headers.get('retry-after');
