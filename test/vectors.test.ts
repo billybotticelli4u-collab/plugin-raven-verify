@@ -8,13 +8,17 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { verifyReceiptV1 } from '../src/verify/verifyReceiptV1.ts';
 import { canonicalJson } from '../src/verify/canonicalJson.ts';
-import { RECEIPT_DISCLAIMER } from '../src/verify/receiptV1.ts';
+import {
+  RECEIPT_DISCLAIMER,
+  RECEIPT_DOMAIN,
+  RECEIPT_VERSION,
+} from '../src/verify/receiptV1.ts';
 
 const FIXTURE_DIR = fileURLToPath(new URL('../fixtures/receipt-v1/', import.meta.url));
 const readVector = (name: string): Record<string, unknown> =>
@@ -84,6 +88,29 @@ test('production BONK vector verifies valid + trusted, and payloadHash recompute
   const recomputed = 'sha256:' + createHash('sha256').update(canonicalJson(body), 'utf8').digest('hex');
   assert.equal(recomputed, input.payloadHash);
 });
+
+for (const attackerKeyType of ['ec', 'rsa'] as const) {
+  test(`rejects a correctly signed receipt that uses an attacker ${attackerKeyType.toUpperCase()} key`, () => {
+    const v = readVector('valid-minimal');
+    const input = v.input as Record<string, unknown>;
+    const pair = attackerKeyType === 'ec'
+      ? generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+      : generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const signedBytes = canonicalJson({
+      domain: RECEIPT_DOMAIN,
+      version: RECEIPT_VERSION,
+      payloadHash: input.payloadHash,
+    });
+    const attackerReceipt = {
+      ...input,
+      signerPublicKey: pair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+      signature: cryptoSign(null, Buffer.from(signedBytes, 'utf8'), pair.privateKey).toString('base64'),
+    };
+    const result = verifyReceiptV1(attackerReceipt, { now: v.now as string });
+    assert.equal(result.valid, false);
+    assert.ok(result.reasons.includes('signature_invalid'));
+  });
+}
 
 test('disclaimer is byte-exact: a one-character change fails verification', () => {
   const v = readVector('valid-minimal');

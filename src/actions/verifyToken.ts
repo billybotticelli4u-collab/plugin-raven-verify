@@ -180,6 +180,12 @@ export const verifyTokenAction: Action = {
         { verification },
       );
     }
+    if (verification.keyTrusted !== true) {
+      return fail(
+        'Raven receipt signer is not in the trusted key set; not usable evidence (fail-closed).',
+        { verification },
+      );
+    }
 
     // 2b. BIND the receipt to the request. A valid signature proves the
     //     receipt is authentic Raven evidence — it does NOT prove it is
@@ -204,10 +210,7 @@ export const verifyTokenAction: Action = {
     const notChecked = [
       ...new Set([...strArray(receipt.scopeChecksNotPerformed), ...strArray(receipt.coverageGaps)]),
     ];
-    const keyLine =
-      verification.keyTrusted === true
-        ? 'signature verified locally against a trusted published key'
-        : 'signature verified locally, but the signing key is NOT in the trusted key set';
+    const keyLine = 'signature verified locally against a trusted published key';
 
     const text = [
       `Raven receipt — ${mint}`,
