@@ -1,6 +1,6 @@
 {
   "name": "plugin-raven-verify",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "ElizaOS plugin: fetch a signed Raven receipt (receipt-v1) for a Solana mint and verify it LOCALLY against trusted published keys before reporting facts, scope, and coverage gaps. Evidence, not a safe/unsafe verdict.",
   "repository": {
     "type": "git",
@@ -26,11 +26,17 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run test:dist",
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"test/**/*.test.ts\""
+    "test": "node --test \"test/**/*.test.ts\"",
+    "test:dist": "node --test test/dist.test.mjs"
   },
   "peerDependencies": {
     "@elizaos/core": "^1.0.0"

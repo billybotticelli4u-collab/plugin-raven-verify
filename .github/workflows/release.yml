@@ -1,0 +1,46 @@
+name: Stage npm release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  stage:
+    if: github.repository == 'billybotticelli4u-collab/plugin-raven-verify'
+    runs-on: ubuntu-latest
+    environment: npm-release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Install staged-publishing npm CLI
+        run: npm install --global npm@11.18.0
+
+      - name: Verify immutable release identity
+        run: |
+          node -e 'if (process.env.GITHUB_REF_NAME !== `v${require("./package.json").version}`) process.exit(1)'
+          git fetch origin main
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run test:dist
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - run: npm pack --dry-run --json
+
+      - name: Stage package for owner review and 2FA approval
+        run: npm stage publish --access public --provenance
