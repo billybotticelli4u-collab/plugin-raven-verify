@@ -203,6 +203,9 @@ export const verifyReceiptV1 = (
       });
       cachePublicKey(signerPublicKey, pub);
     }
+    if (pub.asymmetricKeyType !== "ed25519") {
+      throw new Error("signer key must be Ed25519");
+    }
     signatureOk = cryptoVerify(
       null,
       Buffer.from(signedBytes, "utf8"),

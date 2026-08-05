@@ -118,6 +118,26 @@ describe('VERIFY_TOKEN action', () => {
     assert.match(result.text!, /FAILED local verification/);
   });
 
+  it('fails closed when the receipt signer is not trusted', async () => {
+    const v = vector('production-receipt-v1-bonk-verified');
+    const { fetchImpl } = fetchWith(v.input, { keys: [] });
+    const runtime = runtimeWith({
+      ...RUNTIME_SETTINGS,
+      RAVEN_VERIFIER_URL: 'https://untrusted-verifier.test',
+    });
+    const result = await verifyTokenAction.handler(
+      runtime,
+      msg(`check ${v.input.mintAddress}`),
+      undefined,
+      { fetchImpl, now: v.now },
+    );
+    assert.equal(result.success, false);
+    assert.equal((result.data?.verification as { valid?: boolean }).valid, true);
+    assert.equal((result.data?.verification as { keyTrusted?: boolean }).keyTrusted, false);
+    assert.match(result.text!, /signer is not in the trusted key set/);
+    assert.match(result.text!, /fail-closed/);
+  });
+
   it('429 is transient and preserves the Retry-After hint', async () => {
     const fetchImpl = (async () =>
       jsonResponse(429, { error: 'rate_limited' }, { 'retry-after': '17' })) as unknown as typeof fetch;
