@@ -62,8 +62,18 @@ its own policy.
 npm ci
 npm run typecheck
 npm run build      # tsup → dist (ESM + d.ts)
+npm run test:dist  # exercise the compiled package boundary
 npm test           # offline: vendored golden vectors + fake-fetch action tests
 ```
+
+Changes in 0.3.0: reject non-Ed25519 signer keys and fail closed unless the
+receipt signer is in the trusted key set. The source, compiled-dist, and release
+workflows all carry regressions for those boundaries.
+
+**0.3.0 migration:** pin `RAVEN_TRUSTED_KEYS` before upgrading. If no key is
+pinned, the plugin obtains the trusted set from `/pubkey`; a cold start, network
+failure, or non-200 response now makes the action fail closed instead of
+continuing with an untrusted signer.
 
 Changes in 0.2.0: switched from the v2 `/verify` path to `/receipt/v1` (the
 standard's canonical primitive); receipts are now verified **locally in-code**

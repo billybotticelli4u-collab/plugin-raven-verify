@@ -201,9 +201,11 @@ export const verifyReceiptV1 = (
         format: "der",
         type: "spki",
       });
+      if (pub.asymmetricKeyType !== "ed25519") {
+        throw new Error("signer key must be Ed25519");
+      }
       cachePublicKey(signerPublicKey, pub);
-    }
-    if (pub.asymmetricKeyType !== "ed25519") {
+    } else if (pub.asymmetricKeyType !== "ed25519") {
       throw new Error("signer key must be Ed25519");
     }
     signatureOk = cryptoVerify(
