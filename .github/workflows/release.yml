@@ -52,25 +52,7 @@ jobs:
       # green when upstream fixes. Deliberately NOT a gate.
       - name: Consumer-tree audit (non-blocking visibility)
         continue-on-error: true
-        run: |
-          WORK="$(mktemp -d)"
-          npm pack --pack-destination "$WORK" >/dev/null
-          mkdir "$WORK/consumer"
-          cd "$WORK/consumer"
-          npm init -y >/dev/null
-          npm install "$WORK"/*.tgz
-          set +e
-          npm audit --audit-level=high 2>&1 | tee audit.txt
-          STATUS=${PIPESTATUS[0]}
-          set -e
-          {
-            echo "### Consumer-tree audit of the packed tarball (non-blocking visibility)"
-            echo
-            echo '```'
-            cat audit.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "$STATUS"
+        run: node scripts/consumer-tree-audit.mjs
 
       - run: npm pack --dry-run --json
 

@@ -34,6 +34,8 @@ from this public repository.
    npm run build
    npm run test:dist
    npm test
+   node scripts/assert-runtime-deps.mjs
+   node scripts/consumer-tree-audit.mjs || true
    npm pack --dry-run --json
    ```
 
