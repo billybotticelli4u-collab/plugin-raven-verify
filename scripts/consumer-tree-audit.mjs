@@ -47,6 +47,7 @@ try {
     cwd: consumer,
     encoding: "utf8",
   });
+  if (audit.error) throw audit.error;
   const output = [audit.stdout, audit.stderr].filter(Boolean).join("");
 
   process.stdout.write(output);
