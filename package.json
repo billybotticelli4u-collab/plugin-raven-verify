@@ -1,6 +1,6 @@
 {
   "name": "plugin-raven-verify",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "ElizaOS plugin: fetch a signed Raven receipt (receipt-v1) for a Solana mint and verify it LOCALLY against trusted published keys before reporting facts, scope, and coverage gaps. Evidence, not a safe/unsafe verdict.",
   "repository": {
     "type": "git",
