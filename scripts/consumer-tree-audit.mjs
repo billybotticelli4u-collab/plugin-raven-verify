@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,13 +30,16 @@ function appendSummary(text) {
 const work = mkdtempSync(join(tmpdir(), "consumer-tree-audit-"));
 try {
   execFileSync("npm", ["pack", "--pack-destination", work], { stdio: "inherit" });
+  const [tarball] = readdirSync(work).filter((name) => name.endsWith(".tgz"));
+  if (!tarball) {
+    throw new Error(`npm pack did not produce a tarball in ${work}`);
+  }
 
   const consumer = join(work, "consumer");
   mkdirSync(consumer);
   execFileSync("npm", ["init", "-y"], { cwd: consumer, stdio: "ignore" });
-  execFileSync("npm", ["install", join(work, "*.tgz")], {
+  execFileSync("npm", ["install", join(work, tarball)], {
     cwd: consumer,
-    shell: true,
     stdio: "inherit",
   });
 
