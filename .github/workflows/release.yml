@@ -39,7 +39,39 @@ jobs:
       - run: npm run build
       - run: npm run test:dist
       - run: npm test
-      - run: npm audit --audit-level=high
+
+      # Blocking: the shipped artifact's declared runtime dependency set must be
+      # exactly the expected set. Change-detection, not an audit — it fails the
+      # moment anyone adds a runtime dep, peer, or optional/bundled dep.
+      - name: Assert declared runtime dependency set (blocking)
+        run: node scripts/assert-runtime-deps.mjs
+
+      # Non-blocking visibility: audit a clean consumer install of the packed
+      # tarball and attach the output to the run summary. Red while an
+      # advisory affects the inherited peer tree (see README disclosure);
+      # green when upstream fixes. Deliberately NOT a gate.
+      - name: Consumer-tree audit (non-blocking visibility)
+        continue-on-error: true
+        run: |
+          WORK="$(mktemp -d)"
+          npm pack --pack-destination "$WORK" >/dev/null
+          mkdir "$WORK/consumer"
+          cd "$WORK/consumer"
+          npm init -y >/dev/null
+          npm install "$WORK"/*.tgz
+          set +e
+          npm audit --audit-level=high 2>&1 | tee audit.txt
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "### Consumer-tree audit of the packed tarball (non-blocking visibility)"
+            echo
+            echo '```'
+            cat audit.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
+
       - run: npm pack --dry-run --json
 
       - name: Stage package for owner review and 2FA approval

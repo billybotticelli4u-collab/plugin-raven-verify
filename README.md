@@ -66,14 +66,28 @@ npm run test:dist  # exercise the compiled package boundary
 npm test           # offline: vendored golden vectors + fake-fetch action tests
 ```
 
-Changes in 0.3.0: reject non-Ed25519 signer keys and fail closed unless the
+Changes in 0.3.1: reject non-Ed25519 signer keys and fail closed unless the
 receipt signer is in the trusted key set. The source, compiled-dist, and release
-workflows all carry regressions for those boundaries.
+workflows all carry regressions for those boundaries. (0.3.0 was tagged but
+never published: a release-pipeline audit gate stopped the stage. 0.3.1 carries
+the same verifier changes plus a release-gate redesign and the disclosure
+below.)
 
-**0.3.0 migration:** pin `RAVEN_TRUSTED_KEYS` before upgrading. If no key is
+**0.3.1 migration:** pin `RAVEN_TRUSTED_KEYS` before upgrading. If no key is
 pinned, the plugin obtains the trusted set from `/pubkey`; a cold start, network
 failure, or non-200 response now makes the action fail closed instead of
 continuing with an untrusted signer.
+
+**Inherited-exposure disclosure (0.3.1):** installing this plugin pulls in
+`@elizaos/core` as a peer dependency, and its current tree includes
+`pdfjs-dist` inside the range of
+[GHSA-hq66-cqwq-w95j](https://github.com/advisories/GHSA-hq66-cqwq-w95j)
+(arbitrary JavaScript execution when opening a malicious PDF). This plugin adds
+no PDF functionality and cannot patch the peer's tree (npm overrides apply only
+at the consuming project's root). Tracked upstream:
+[elizaOS/eliza#17917](https://github.com/elizaOS/eliza/issues/17917). The
+release pipeline audits a clean consumer install of the packed tarball and
+attaches the result to every release run as non-blocking visibility.
 
 Changes in 0.2.0: switched from the v2 `/verify` path to `/receipt/v1` (the
 standard's canonical primitive); receipts are now verified **locally in-code**
