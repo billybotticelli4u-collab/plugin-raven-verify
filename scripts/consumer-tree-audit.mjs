@@ -53,7 +53,7 @@ try {
   process.stdout.write(output);
   appendSummary(output);
 
-  process.exit(audit.status ?? 1);
+  process.exitCode = audit.status ?? 1;
 } finally {
   rmSync(work, { recursive: true, force: true });
 }
