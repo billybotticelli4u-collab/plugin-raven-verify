@@ -30,6 +30,18 @@ import {
 const PUBLIC_KEY_CACHE_MAX = 64;
 const publicKeyCache = new Map<string, ReturnType<typeof createPublicKey>>();
 
+// RFC 4648 standard Base64, including canonical padding and pad bits. Buffer's
+// permissive decoder must not turn a noncanonical wire spelling into a valid
+// signature on Node while main verify-js / browser / Python reject the same receipt.
+const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+const decodeCanonicalBase64 = (value: string): Buffer => {
+  if (!CANONICAL_BASE64.test(value)) throw new Error("noncanonical base64");
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) throw new Error("noncanonical base64");
+  return decoded;
+};
+
 const cachePublicKey = (
   signerPublicKey: string,
   publicKey: ReturnType<typeof createPublicKey>,
@@ -48,8 +60,31 @@ export interface VerifyReceiptOptions {
    * Trusted signer public keys (base64 SPKI DER). When provided, key trust is
    * reported via `keyTrusted`. Trust is NON-FATAL — it never gates `valid`.
    */
-  trustedKeys?: ReadonlySet<string>;
+  trustedKeys?: ReadonlySet<string> | readonly string[] | null;
 }
+
+
+/**
+ * Normalize a caller-supplied trustedKeys collection to a Set of strings.
+ * Returns null on ANY malformed input. Validation is total — no exception
+ * escapes (8b0068bd). Arrays are accepted because JSON/env callers hold arrays.
+ */
+export const normalizeTrustedKeys = (
+  input: ReadonlySet<string> | readonly string[] | null | undefined,
+): ReadonlySet<string> | null => {
+  try {
+    const entries: unknown = input instanceof Set ? [...input] : input;
+    if (!Array.isArray(entries)) return null;
+    const out = new Set<string>();
+    for (const entry of entries) {
+      if (typeof entry !== "string") return null;
+      out.add(entry);
+    }
+    return out;
+  } catch {
+    return null;
+  }
+};
 
 export interface VerifyReceiptResult {
   valid: boolean;
@@ -197,7 +232,7 @@ export const verifyReceiptV1 = (
     let pub = publicKeyCache.get(signerPublicKey);
     if (!pub) {
       pub = createPublicKey({
-        key: Buffer.from(signerPublicKey, "base64"),
+        key: decodeCanonicalBase64(signerPublicKey),
         format: "der",
         type: "spki",
       });
@@ -212,7 +247,7 @@ export const verifyReceiptV1 = (
       null,
       Buffer.from(signedBytes, "utf8"),
       pub,
-      Buffer.from(r.signature as string, "base64"),
+      decodeCanonicalBase64(r.signature as string),
     );
   } catch {
     signatureOk = false;
@@ -224,9 +259,15 @@ export const verifyReceiptV1 = (
 
   // 6. Key trust (optional, NON-FATAL). Reported separately from `valid`.
   let keyTrusted: boolean | undefined;
-  if (opts.trustedKeys) {
-    keyTrusted = opts.trustedKeys.has(r.signerPublicKey as string);
-    if (!keyTrusted) reasons.push("key_untrusted");
+  if (opts.trustedKeys !== undefined) {
+    const keys = normalizeTrustedKeys(opts.trustedKeys);
+    if (keys === null) {
+      keyTrusted = false;
+      reasons.push("trust_config_invalid");
+    } else {
+      keyTrusted = keys.has(r.signerPublicKey as string);
+      if (!keyTrusted) reasons.push("key_untrusted");
+    }
   }
 
   // 7. Freshness (reported, NON-FATAL — SPEC §7). Staleness ≠ tampered. An
