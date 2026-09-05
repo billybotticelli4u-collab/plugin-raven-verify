@@ -33,10 +33,15 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run test:dist",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run test:dist && npm run test:package && npm run test:trust-input && npm run test:doc-contract",
     "typecheck": "tsc --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
-    "test:dist": "node --test test/dist.test.mjs"
+    "test:dist": "node --test test/dist.test.mjs",
+    "test:package": "node --test test/package-boundary.test.mjs",
+    "test:trust-input": "node --test test/trust-input-surface.test.mjs",
+    "test:doc-contract": "node --test test/doc-contract.test.mjs",
+    "test:mutations": "node mutations/run-mutations.mjs",
+    "test:release-quality": "npm run typecheck && npm test && npm run build && npm run test:dist && npm run test:package && npm run test:trust-input && npm run test:doc-contract && npm run test:mutations"
   },
   "peerDependencies": {
     "@elizaos/core": "^1.0.0"

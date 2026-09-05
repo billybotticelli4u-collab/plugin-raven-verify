@@ -1,27 +1,29 @@
-# Typecheck, build, and test on every PR and on main.
-# Tests are offline: the vendored golden vectors (including a real
-# production-signed receipt) and a fake fetch — no live endpoints, no secrets.
 name: test
-
 on:
   pull_request:
   push:
     branches: [main]
-
 permissions:
   contents: read
-
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22.18.0", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:dist
       - run: npm test
+      - run: npm run test:trust-input
+      - run: npm run test:doc-contract
+      - run: npm run test:package
+      - run: npm run test:mutations

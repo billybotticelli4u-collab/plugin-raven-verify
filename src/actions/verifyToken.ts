@@ -89,7 +89,7 @@ export const verifyTokenAction: Action = {
   similes: ['CHECK_TOKEN', 'VERIFY_MINT', 'RAVEN_VERIFY', 'TOKEN_EVIDENCE', 'TOKEN_RECEIPT'],
   description:
     'Fetch a signed Raven receipt (receipt-v1) of on-chain evidence for a Solana token ' +
-    'mint and VERIFY IT LOCALLY against trusted published keys before reporting. Reports ' +
+    'mint and VERIFY IT LOCALLY against caller-supplied trusted keys before reporting. Reports ' +
     'the checks performed, the checks NOT performed, coverage gaps, the observed ' +
     'slot/timestamp, freshness, and local verification status. Does NOT give a ' +
     'safe/unsafe verdict, trading advice, or a price prediction; reports locally ' +

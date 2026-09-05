@@ -1,6 +1,0 @@
---- a/README.md
-+++ b/README.md
-@@
--Unset/empty ⇒ empty trusted set; action fails closed (`keyTrusted !== true`). `/pubkey` is discovery/cross-check only and **must not** bootstrap trust.
-+Unset ⇒ the published `/pubkey` key set is fetched and trusted.
-# CLASSIFY: CONTRACT
