@@ -31,14 +31,15 @@ const fetchWith = (receipt, keys) =>
 const settings = {
   RAVEN_API_KEY: 'compiled-boundary-test-key',
   RAVEN_VERIFIER_URL: 'https://compiled-boundary.test',
+  RAVEN_TRUSTED_KEYS: fixture.trustedKeys.join(','),
 };
 
-test('compiled action succeeds for the production Ed25519 receipt and trusted key', async () => {
+test('compiled action succeeds for the production Ed25519 receipt and pinned key', async () => {
   const result = await verifyTokenAction.handler(
     runtimeWith(settings),
     messageFor(fixture.input.mintAddress),
     undefined,
-    { fetchImpl: fetchWith(fixture.input, [fixture.input.signerPublicKey]), now: fixture.now },
+    { fetchImpl: fetchWith(fixture.input, ['HOSTILE_IGNORED']), now: fixture.now },
   );
   assert.equal(result.success, true);
   assert.equal(result.data.verification.keyTrusted, true);
@@ -46,14 +47,34 @@ test('compiled action succeeds for the production Ed25519 receipt and trusted ke
 
 test('compiled action fails closed when the signer is not trusted', async () => {
   const result = await verifyTokenAction.handler(
-    runtimeWith({ ...settings, RAVEN_VERIFIER_URL: 'https://compiled-untrusted.test' }),
+    runtimeWith({
+      ...settings,
+      RAVEN_VERIFIER_URL: 'https://compiled-untrusted.test',
+      RAVEN_TRUSTED_KEYS: 'NOT_THE_SIGNER',
+    }),
     messageFor(fixture.input.mintAddress),
     undefined,
-    { fetchImpl: fetchWith(fixture.input, []), now: fixture.now },
+    { fetchImpl: fetchWith(fixture.input, [fixture.input.signerPublicKey]), now: fixture.now },
   );
   assert.equal(result.success, false);
   assert.equal(result.data.verification.valid, true);
   assert.equal(result.data.verification.keyTrusted, false);
+  assert.match(result.text, /trusted key set/);
+});
+
+test('compiled action fails closed when no pin even if /pubkey returns signer', async () => {
+  const result = await verifyTokenAction.handler(
+    runtimeWith({
+      RAVEN_API_KEY: settings.RAVEN_API_KEY,
+      RAVEN_VERIFIER_URL: 'https://compiled-nopin.test',
+      // RAVEN_TRUSTED_KEYS intentionally absent
+    }),
+    messageFor(fixture.input.mintAddress),
+    undefined,
+    { fetchImpl: fetchWith(fixture.input, [fixture.input.signerPublicKey]), now: fixture.now },
+  );
+  assert.equal(result.success, false);
+  assert.notEqual(result.data.verification.keyTrusted, true);
   assert.match(result.text, /trusted key set/);
 });
 
@@ -77,14 +98,16 @@ for (const attackerKeyType of ['ed25519', 'ec', 'rsa']) {
       signerPublicKey,
       signature: cryptoSign(null, Buffer.from(signedBytes, 'utf8'), pair.privateKey).toString('base64'),
     };
+    // Pin the attacker key to isolate protocol (Ed25519-only) from trust bootstrap.
     const result = await verifyTokenAction.handler(
       runtimeWith({
         ...settings,
         RAVEN_VERIFIER_URL: `https://compiled-${attackerKeyType}.test`,
+        RAVEN_TRUSTED_KEYS: signerPublicKey,
       }),
       messageFor(receipt.mintAddress),
       undefined,
-      { fetchImpl: fetchWith(receipt, [signerPublicKey]), now: fixture.now },
+      { fetchImpl: fetchWith(receipt, []), now: fixture.now },
     );
     const expectedSuccess = attackerKeyType === 'ed25519';
     assert.equal(result.success, expectedSuccess);

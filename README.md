@@ -1,8 +1,8 @@
 # plugin-raven-verify
 
 ElizaOS plugin: before an agent acts on a Solana token, fetch a **signed Raven
-receipt** (receipt-v1) for the mint and **verify it locally** against trusted
-published keys — then report the facts. Evidence, not a safe/unsafe verdict.
+receipt** (receipt-v1) for the mint and **verify it locally** against caller-pinned
+trusted keys — then report the facts. Evidence, not a safe/unsafe verdict.
 
 ```
 agent mentions a mint → POST /receipt/v1 → verify LOCALLY (in this plugin's code)
@@ -32,7 +32,7 @@ yourself: `npm test`, fully offline.
 |---|---|---|
 | `RAVEN_API_KEY` | yes | Producing receipts is metered; the action is disabled without a key. Verification of receipts is free and local, always. |
 | `RAVEN_VERIFIER_URL` | no | Defaults to `https://raven-hosted-verifier.onrender.com`. |
-| `RAVEN_TRUSTED_KEYS` | no | Comma-separated base64 SPKI keys to pin (strongest). Unset ⇒ the published `/pubkey` key set is fetched and cached (10 min). |
+| `RAVEN_TRUSTED_KEYS` | **yes for usable evidence** | Comma-separated base64 SPKI keys the caller obtained independently (pin). Unset/empty ⇒ empty trusted set; action fails closed (`keyTrusted !== true`). `/pubkey` is discovery/cross-check only and **must not** bootstrap trust. |
 
 ## What the agent gets
 
@@ -66,17 +66,23 @@ npm run test:dist  # exercise the compiled package boundary
 npm test           # offline: vendored golden vectors + fake-fetch action tests
 ```
 
+Changes in 0.3.2 (**BREAKING** trust bootstrap): unset `RAVEN_TRUSTED_KEYS` no
+longer fetches `/pubkey` as the trusted key set. Callers **must** supply an
+independently obtained pin via `RAVEN_TRUSTED_KEYS`. `/pubkey` must not bootstrap
+trust (discovery/cross-check only, if used at all). `valid != keyTrusted`; do not
+gate on `valid` alone. No safe/approved/pass/verdict language. Prior default in
+0.3.1 was no-pin→`/pubkey`; new default is no-pin→fail closed.
+
+**0.3.2 migration:** before upgrading, set `RAVEN_TRUSTED_KEYS` to the base64
+SPKI pin(s) you obtained out-of-band. Without a pin, `VERIFY_TOKEN` fails closed
+even if `/pubkey` is reachable and returns the receipt signer.
+
 Changes in 0.3.1: reject non-Ed25519 signer keys and fail closed unless the
 receipt signer is in the trusted key set. The source, compiled-dist, and release
 workflows all carry regressions for those boundaries. (0.3.0 was tagged but
 never published: a release-pipeline audit gate stopped the stage. 0.3.1 carries
 the same verifier changes plus a release-gate redesign and the disclosure
 below.)
-
-**0.3.1 migration:** pin `RAVEN_TRUSTED_KEYS` before upgrading. If no key is
-pinned, the plugin obtains the trusted set from `/pubkey`; a cold start, network
-failure, or non-200 response now makes the action fail closed instead of
-continuing with an untrusted signer.
 
 **Inherited-exposure disclosure (0.3.1):** installing this plugin pulls in
 `@elizaos/core` as a peer dependency, and its current tree includes

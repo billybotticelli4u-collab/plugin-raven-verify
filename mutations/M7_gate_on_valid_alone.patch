@@ -1,0 +1,11 @@
+--- a/src/actions/verifyToken.ts
++++ b/src/actions/verifyToken.ts
+@@
+-    if (verification.keyTrusted !== true) {
+-      return fail(
+-        'Raven receipt signer is not in the trusted key set; not usable evidence (fail-closed).',
+-        { verification },
+-      );
+-    }
++    // MUTANT M7: gate on valid alone (keyTrusted gate removed)
+# CLASSIFY: LOAD-BEARING

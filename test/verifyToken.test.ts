@@ -3,12 +3,17 @@
 // Uses node:test directly. Time is PINNED via an options hook (now) so tests
 // are deterministic regardless of wall clock. Local verification is real:
 // the plugin's vendored kernel runs against the golden vectors.
+//
+// Ancestry: based on PR #10 head; adds fail-closed bootstrap #10 deferred.
+// RED: RAVEN_TRUSTED_KEYS absent + hostile /pubkey must NOT elevate trust.
+// See docs/TRUST_BOOTSTRAP_RED.md.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { verifyTokenAction, extractMint, loadTrustedKeys } from '../src/actions/verifyToken.ts';
 
@@ -34,8 +39,8 @@ const jsonResponse = (status: number, body: unknown, headers: Record<string, str
     headers: { 'content-type': 'application/json', ...headers },
   });
 
-// A fetchImpl that returns a queued receipt response for /receipt/v1 and the
-// published key set for /pubkey.
+// A fetchImpl that returns a queued receipt response for /receipt/v1 and may
+ // answer /pubkey (discovery must NEVER become the trusted set).
 const fetchWith = (receipt: unknown, opts: { keys?: string[] } = {}) => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -70,10 +75,13 @@ describe('VERIFY_TOKEN action', () => {
     assert.equal(ok, false);
   });
 
-  it('happy path: verifies locally against published keys and reports evidence', async () => {
+  it('happy path: verifies locally against pinned keys and reports evidence', async () => {
     const v = vector('production-receipt-v1-bonk-verified');
-    const { fetchImpl } = fetchWith(v.input, { keys: [v.input.signerPublicKey] });
-    const runtime = runtimeWith(RUNTIME_SETTINGS);
+    const { fetchImpl, calls } = fetchWith(v.input, { keys: ['HOSTILE_SHOULD_NOT_MATTER'] });
+    const runtime = runtimeWith({
+      ...RUNTIME_SETTINGS,
+      RAVEN_TRUSTED_KEYS: v.trustedKeys.join(','),
+    });
     const texts: string[] = [];
     const result = await verifyTokenAction.handler(
       runtime,
@@ -87,14 +95,18 @@ describe('VERIFY_TOKEN action', () => {
     );
     assert.equal(result.success, true);
     const text = texts.join('\n');
-    assert.ok(text.includes('verified locally against a trusted published key'));
+    assert.ok(text.includes('verified locally against a pinned trusted key'));
     assert.ok(!text.includes('STALE'));
+    assert.equal(calls.filter((c) => c.url.endsWith('/pubkey')).length, 0, 'must not fetch /pubkey for trust');
   });
 
   it('fails closed when the receipt is bound to a different mint', async () => {
     const v = vector('production-receipt-v1-bonk-verified');
-    const { fetchImpl } = fetchWith(v.input, { keys: [v.input.signerPublicKey] });
-    const runtime = runtimeWith(RUNTIME_SETTINGS);
+    const { fetchImpl } = fetchWith(v.input);
+    const runtime = runtimeWith({
+      ...RUNTIME_SETTINGS,
+      RAVEN_TRUSTED_KEYS: v.trustedKeys.join(','),
+    });
     const result = await verifyTokenAction.handler(runtime, msg(`check ${MINT}`), undefined, {
       fetchImpl,
       now: v.now,
@@ -107,7 +119,10 @@ describe('VERIFY_TOKEN action', () => {
   it('fails closed when local verification fails (tampered signature)', async () => {
     const v = vector('tampered-signature');
     const { fetchImpl } = fetchWith(v.input);
-    const runtime = runtimeWith(RUNTIME_SETTINGS);
+    const runtime = runtimeWith({
+      ...RUNTIME_SETTINGS,
+      RAVEN_TRUSTED_KEYS: (v.trustedKeys ?? []).join(','),
+    });
     const result = await verifyTokenAction.handler(
       runtime,
       msg(`check ${v.input.mintAddress}`),
@@ -118,12 +133,12 @@ describe('VERIFY_TOKEN action', () => {
     assert.match(result.text!, /FAILED local verification/);
   });
 
-  it('fails closed when the receipt signer is not trusted', async () => {
+  it('fails closed when the receipt signer is not trusted (CASE D)', async () => {
     const v = vector('production-receipt-v1-bonk-verified');
-    const { fetchImpl } = fetchWith(v.input, { keys: [] });
+    const { fetchImpl } = fetchWith(v.input, { keys: [v.input.signerPublicKey] });
     const runtime = runtimeWith({
       ...RUNTIME_SETTINGS,
-      RAVEN_VERIFIER_URL: 'https://untrusted-verifier.test',
+      RAVEN_TRUSTED_KEYS: 'NOT_THE_SIGNER_PIN',
     });
     const result = await verifyTokenAction.handler(
       runtime,
@@ -152,8 +167,11 @@ describe('VERIFY_TOKEN action', () => {
 
   it('receipts sent upstream contain ONLY mintAddress', async () => {
     const v = vector('production-receipt-v1-bonk-verified');
-    const { fetchImpl, calls } = fetchWith(v.input, { keys: [v.input.signerPublicKey] });
-    const runtime = runtimeWith(RUNTIME_SETTINGS);
+    const { fetchImpl, calls } = fetchWith(v.input);
+    const runtime = runtimeWith({
+      ...RUNTIME_SETTINGS,
+      RAVEN_TRUSTED_KEYS: v.trustedKeys.join(','),
+    });
     await verifyTokenAction.handler(runtime, msg(`check ${v.input.mintAddress}`), undefined, {
       fetchImpl,
       now: v.now,
@@ -164,7 +182,7 @@ describe('VERIFY_TOKEN action', () => {
   });
 });
 
-// --- Group C regression: timeouts + URL-keyed pubkey cache -------------------
+// --- Group C regression: timeouts (pubkey cache removed with trust bootstrap) ---
 
 it('a hanging /receipt/v1 fetch fails fast (transient), never hangs forever', async () => {
   const hanging = (async (_url: string, init?: RequestInit) =>
@@ -184,30 +202,6 @@ it('a hanging /receipt/v1 fetch fails fast (transient), never hangs forever', as
   assert.equal(result.success, false);
 });
 
-it('pubkey cache is keyed by verifier URL (no cross-host key reuse)', async () => {
-  const calls: string[] = [];
-  const keysFor = (host: string) =>
-    (async (url: string) => {
-      calls.push(url);
-      return jsonResponse(200, { keys: [{ publicKeyBase64: `key-of-${host}` }] });
-    }) as unknown as typeof fetch;
-
-  const runtime = runtimeWith(RUNTIME_SETTINGS);
-  const a1 = await loadTrustedKeys(runtime, 'https://host-a.example', keysFor('host-a'));
-  const a2 = await loadTrustedKeys(runtime, 'https://host-a.example', keysFor('host-a')); // cached
-  const b1 = await loadTrustedKeys(runtime, 'https://host-b.example', keysFor('host-b')); // must refetch
-
-  assert.ok(a1.has('key-of-host-a'));
-  assert.ok(a2.has('key-of-host-a'));
-  assert.ok(b1.has('key-of-host-b'));
-  assert.ok(!b1.has('key-of-host-a'), 'must not serve host-a keys for host-b');
-  assert.equal(calls.filter((u) => u.includes('host-a')).length, 1, 'host-a fetched once (cached)');
-  assert.equal(calls.filter((u) => u.includes('host-b')).length, 1, 'host-b fetched separately');
-});
-
-// --- Restored pre-existing coverage (dropped in the first push of this branch,
-// --- restored verbatim-in-substance with this file's helper style) -----------
-
 const FORBIDDEN = /\b(safe|unsafe|legit|scam-free|approved|guaranteed|rug-proof)\b/i;
 
 it('stale receipt (wall-clock now) is reported STALE while still verifying', async () => {
@@ -223,21 +217,117 @@ it('stale receipt (wall-clock now) is reported STALE while still verifying', asy
   assert.ok(!FORBIDDEN.test(result.text!));
 });
 
-it('loadTrustedKeys: pinned env wins; /pubkey fallback parses the published key set', async () => {
+it('loadTrustedKeys: pinned env wins; absent pin does NOT bootstrap from /pubkey (CASE A/B)', async () => {
+  let pubkeyCalls = 0;
+  const hostileFetch = (async (url: string) => {
+    if (String(url).endsWith('/pubkey')) {
+      pubkeyCalls += 1;
+      return jsonResponse(200, { keys: [{ publicKeyBase64: 'HOSTILE_PUBKEY' }] });
+    }
+    return new Response('unexpected', { status: 500 });
+  }) as unknown as typeof fetch;
+
   const pinned = await loadTrustedKeys(
     runtimeWith({ RAVEN_TRUSTED_KEYS: ' keyA , keyB ' }),
     'https://raven.example.test',
-    (async () => new Response('should-not-be-called', { status: 500 })) as unknown as typeof fetch,
+    hostileFetch,
   );
   assert.deepEqual([...pinned].sort(), ['keyA', 'keyB']);
+  assert.equal(pubkeyCalls, 0, 'pinned path must not call /pubkey');
 
-  const fetched = await loadTrustedKeys(
-    runtimeWith({}),
+  const unpinned = await loadTrustedKeys(runtimeWith({}), 'https://raven.example.test', hostileFetch);
+  assert.deepEqual([...unpinned], []);
+  assert.equal(pubkeyCalls, 0, 'unpinned path must not call /pubkey for trust');
+});
+
+it('loadTrustedKeys: malformed pin config fails closed (CASE C)', async () => {
+  const emptyPins = await loadTrustedKeys(
+    runtimeWith({ RAVEN_TRUSTED_KEYS: ' , , ' }),
     'https://raven.example.test',
-    (async (url: string) => {
-      assert.ok(url.endsWith('/pubkey'));
-      return jsonResponse(200, { keys: [{ keyId: 'rvk_x', publicKeyBase64: 'PUBKEY_B64', alg: 'ed25519' }] });
-    }) as unknown as typeof fetch,
   );
-  assert.deepEqual([...fetched], ['PUBKEY_B64']);
+  assert.deepEqual([...emptyPins], []);
+
+  const whitespace = await loadTrustedKeys(
+    runtimeWith({ RAVEN_TRUSTED_KEYS: '   ' }),
+    'https://raven.example.test',
+  );
+  assert.deepEqual([...whitespace], []);
+
+  const nonStringRuntime = {
+    getSetting: () => ({ not: 'a-string' }),
+  } as unknown as Parameters<typeof verifyTokenAction.validate>[0];
+  const badType = await loadTrustedKeys(nonStringRuntime, 'https://raven.example.test');
+  assert.deepEqual([...badType], []);
+});
+
+/**
+ * RED / hostile trust-bootstrap (frozen evidence — docs/TRUST_BOOTSTRAP_RED.md):
+ * Pre-fix (#10 head and 0.3.1): absent RAVEN_TRUSTED_KEYS + hostile /pubkey
+ * returning attacker pubkey + attacker-signed receipt ⇒ action succeeded with
+ * keyTrusted true (trust bootstrap via discovery).
+ * Post-fix: must fail closed; /pubkey must not elevate trust.
+ */
+it('RED hostile: no pin + hostile /pubkey + attacker receipt must fail closed (CASE B/F)', async () => {
+  const v = vector('production-receipt-v1-bonk-verified');
+  const pair = generateKeyPairSync('ed25519');
+  const attackerPub = pair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+  const signedBytes = JSON.stringify({
+    domain: 'raven-receipt',
+    payloadHash: v.input.payloadHash,
+    version: 'v1',
+  });
+  const receipt = {
+    ...v.input,
+    signerPublicKey: attackerPub,
+    signature: cryptoSign(null, Buffer.from(signedBytes, 'utf8'), pair.privateKey).toString('base64'),
+  };
+  const { fetchImpl, calls } = fetchWith(receipt, { keys: [attackerPub] });
+  // CASE B: RAVEN_TRUSTED_KEYS absent — must NOT trust /pubkey.
+  const runtime = runtimeWith(RUNTIME_SETTINGS);
+  const result = await verifyTokenAction.handler(
+    runtime,
+    msg(`check ${receipt.mintAddress}`),
+    undefined,
+    { fetchImpl, now: v.now },
+  );
+  assert.equal(result.success, false, 'hostile discovery must not succeed as trusted verification');
+  const verification = result.data?.verification as { valid?: boolean; keyTrusted?: boolean };
+  // Signature may be cryptographically valid; trust must not elevate from /pubkey.
+  assert.notEqual(verification?.keyTrusted, true);
+  assert.match(result.text!, /trusted key set|fail-closed/i);
+  assert.equal(
+    calls.filter((c) => c.url.endsWith('/pubkey')).length,
+    0,
+    'action must not fetch /pubkey to populate trust',
+  );
+});
+
+it('CASE F: pinned path ignores /pubkey unavailable; unpinned fails closed without /pubkey', async () => {
+  const v = vector('production-receipt-v1-bonk-verified');
+  const fetchNoPubkey = (async (url: string) => {
+    if (String(url).endsWith('/pubkey')) {
+      return jsonResponse(503, { error: 'down' });
+    }
+    return jsonResponse(200, v.input);
+  }) as unknown as typeof fetch;
+
+  const pinnedOk = await verifyTokenAction.handler(
+    runtimeWith({ ...RUNTIME_SETTINGS, RAVEN_TRUSTED_KEYS: v.trustedKeys.join(',') }),
+    msg(`check ${v.input.mintAddress}`),
+    undefined,
+    { fetchImpl: fetchNoPubkey, now: v.now },
+  );
+  assert.equal(pinnedOk.success, true);
+
+  const unpinnedFail = await verifyTokenAction.handler(
+    runtimeWith(RUNTIME_SETTINGS),
+    msg(`check ${v.input.mintAddress}`),
+    undefined,
+    { fetchImpl: fetchNoPubkey, now: v.now },
+  );
+  assert.equal(unpinnedFail.success, false);
+  assert.notEqual(
+    (unpinnedFail.data?.verification as { keyTrusted?: boolean })?.keyTrusted,
+    true,
+  );
 });

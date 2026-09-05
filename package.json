@@ -1,7 +1,7 @@
 {
   "name": "plugin-raven-verify",
-  "version": "0.3.1",
-  "description": "ElizaOS plugin: fetch a signed Raven receipt (receipt-v1) for a Solana mint and verify it LOCALLY against trusted published keys before reporting facts, scope, and coverage gaps. Evidence, not a safe/unsafe verdict.",
+  "version": "0.3.2",
+  "description": "ElizaOS plugin: fetch a signed Raven receipt (receipt-v1) for a Solana mint and verify it LOCALLY against caller-pinned trusted keys before reporting facts, scope, and coverage gaps. Evidence, not a safe/unsafe verdict.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/billybotticelli4u-collab/plugin-raven-verify.git"
@@ -61,6 +61,12 @@
         "description": "Raven verifier base URL (override only if self-hosting).",
         "required": false,
         "default": "https://raven-hosted-verifier.onrender.com"
+      },
+      "RAVEN_TRUSTED_KEYS": {
+        "type": "string",
+        "description": "Comma-separated base64 SPKI public keys obtained independently (pin). Required for usable evidence; unset fails closed. /pubkey must not bootstrap trust.",
+        "required": true,
+        "sensitive": false
       }
     }
   },

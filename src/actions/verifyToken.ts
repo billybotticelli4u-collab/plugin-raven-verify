@@ -28,9 +28,6 @@ export function extractMint(text: string | undefined | null): string | null {
 /** HTTP statuses that mean "try again later", not "no". */
 const TRANSIENT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-let pubkeyCache: { keys: ReadonlySet<string>; fetchedAt: number; verifierUrl: string } | null = null;
-const PUBKEY_CACHE_TTL_MS = 10 * 60_000;
-
 /**
  * Hard ceiling for any single outbound call. A hung verifier (cold starts,
  * network partitions) must never hang the action forever. Overridable via
@@ -44,50 +41,44 @@ const fetchTimeoutMs = (runtime: IAgentRuntime): number => {
 
 /**
  * Trusted signer keys for LOCAL verification.
- * Strongest: pin via RAVEN_TRUSTED_KEYS (comma-separated base64 SPKI DER).
- * Fallback: fetch {verifier}/pubkey and trust the published key set (cached 10 min).
- * Returns an empty set on failure — verification then reports keyTrusted: false
- * rather than pretending.
+ *
+ * CASE A: valid RAVEN_TRUSTED_KEYS → use ONLY those independently obtained pins.
+ * CASE B: absent / empty → return empty set (NO /pubkey trust bootstrap).
+ * CASE C: malformed pin config (non-string, or present-but-zero-keys) → empty set.
+ *
+ * `/pubkey` must NEVER populate the trusted set. Discovery/cross-check is out of
+ * scope for trust elevation; the action already fails closed when
+ * keyTrusted !== true.
+ *
+ * Ancestry: based on PR #10 head (canonical Base64 / total trustedKeys); this
+ * change adds the fail-closed bootstrap that #10 explicitly deferred.
  */
 export async function loadTrustedKeys(
   runtime: IAgentRuntime,
-  verifierUrl: string,
-  fetchImpl: typeof fetch = fetch,
+  _verifierUrl: string,
+  _fetchImpl: typeof fetch = fetch,
 ): Promise<ReadonlySet<string>> {
-  const pinned = runtime.getSetting('RAVEN_TRUSTED_KEYS') as string | undefined;
-  if (pinned && pinned.trim().length > 0) {
-    return new Set(
-      pinned
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    );
-  }
-  // The cache is keyed BY VERIFIER URL: switching RAVEN_VERIFIER_URL at runtime
-  // must not keep serving the previous host's key set.
-  if (
-    pubkeyCache &&
-    pubkeyCache.verifierUrl === verifierUrl &&
-    Date.now() - pubkeyCache.fetchedAt < PUBKEY_CACHE_TTL_MS
-  ) {
-    return pubkeyCache.keys;
-  }
-  try {
-    const res = await fetchImpl(`${verifierUrl.replace(/\/+$/, '')}/pubkey`, {
-      signal: AbortSignal.timeout(fetchTimeoutMs(runtime)),
-    });
-    if (!res.ok) return new Set();
-    const body = (await res.json()) as { keys?: Array<{ publicKeyBase64?: unknown }> };
-    const keys = new Set(
-      (body?.keys ?? [])
-        .map((k) => k?.publicKeyBase64)
-        .filter((s): s is string => typeof s === 'string' && s.length > 0),
-    );
-    if (keys.size > 0) pubkeyCache = { keys, fetchedAt: Date.now(), verifierUrl };
-    return keys;
-  } catch {
+  const pinned = runtime.getSetting('RAVEN_TRUSTED_KEYS');
+  if (pinned === undefined || pinned === null) {
     return new Set();
   }
+  if (typeof pinned !== 'string') {
+    // CASE C: malformed pin config — fail closed (empty ⇒ keyTrusted false).
+    return new Set();
+  }
+  const trimmed = pinned.trim();
+  if (trimmed.length === 0) {
+    // CASE B: unset-equivalent whitespace — no discovery bootstrap.
+    return new Set();
+  }
+  const keys = new Set(
+    trimmed
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+  // CASE C: present but yields zero pins (e.g. ",,,") — fail closed.
+  return keys;
 }
 
 const strArray = (v: unknown): string[] =>
@@ -210,7 +201,7 @@ export const verifyTokenAction: Action = {
     const notChecked = [
       ...new Set([...strArray(receipt.scopeChecksNotPerformed), ...strArray(receipt.coverageGaps)]),
     ];
-    const keyLine = 'signature verified locally against a trusted published key';
+    const keyLine = 'signature verified locally against a pinned trusted key';
 
     const text = [
       `Raven receipt — ${mint}`,

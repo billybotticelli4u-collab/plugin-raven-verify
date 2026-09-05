@@ -1,0 +1,11 @@
+--- a/src/actions/verifyToken.ts
++++ b/src/actions/verifyToken.ts
+@@
+-  if (typeof pinned !== 'string') {
+-    // CASE C: malformed pin config — fail closed (empty ⇒ keyTrusted false).
+-    return new Set();
+-  }
++  if (typeof pinned !== 'string') {
++    return new Set(String(pinned).split(',').map((s) => s.trim()).filter(Boolean));
++  }
+# CLASSIFY: LOAD-BEARING
