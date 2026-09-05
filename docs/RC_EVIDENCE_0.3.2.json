@@ -1,0 +1,23 @@
+{
+  "branch": "billy/plugin-0.3.2-release-quality",
+  "head": "0e668209343ad3edd01d44672851743905ab7016",
+  "tree": "60ee038163527d4318ab69be7e69fbba65e2ccd1",
+  "version": "0.3.2",
+  "node": "v22.18.0",
+  "npmVersion": "10.9.3",
+  "artifact": "plugin-raven-verify-0.3.2.tgz",
+  "digest": "262966dfb463066a78bcff52d3162be3a4d0809277986cffbcc24e39ac580503",
+  "size": 20999,
+  "integ": "sha512-4o/9Um1j/i92mNejOkWYCkTimmX/aQnd80qJFz2NCWC3lgIfDomTv03IPxyDxdgRfdVv4YqsYA6v6bgmKPy4TA==",
+  "shasum": "b02c435b683809d9e3d3601a19b3435227b04209",
+  "member_count": 6,
+  "members": [
+    "package/LICENSE",
+    "package/dist/index.js",
+    "package/package.json",
+    "package/dist/index.js.map",
+    "package/README.md",
+    "package/dist/index.d.ts"
+  ],
+  "fc_findings": []
+}
